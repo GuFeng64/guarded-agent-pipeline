@@ -229,7 +229,7 @@ def main():
     print(f'  高价值回流样本      {len(fb.high_value_ids)}')
     print()
     print('  ⚠️ 合成数据 ⇒ 上述数值**不可用于科研结论**，仅用于演示接口与流程。')
-    print('     真实数据上的结果见仓库 README 的「测量结果」一节。')
+    print('     原始数据集上的实测值见仓库 README 的「实测结果」一节。')
 
 
 if __name__ == '__main__':
