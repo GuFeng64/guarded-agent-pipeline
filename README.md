@@ -1,193 +1,208 @@
 # Guarded Agent Pipeline
 
-**A decision layer with guarded LLM agents, deterministic guardrails, and evidence-backed guarantees.**
+**受门控的 Agent 决策层：LLM 提议，确定性规则把关，每条保证都配一条可证伪的测试。**
 
-Models predict. Someone still has to decide **whether to trust a number** — report it, re-measure it, or escalate to a reference method. This repository is that decision layer: a modular pipeline where an LLM *proposes* actions, deterministic rules *gate* them, and every guarantee ships with a test that can refute it.
+模型负责预测，但总得有人决定**这个数能不能信** —— 是直接报告、建议复测，还是转参考方法。
+本仓库就是这一层：一个模块化流水线，**LLM 提议处置动作，确定性规则逐条把关**，
+不通过则回退到规则决策。每个"保证"都附带一条**能把它推翻**的测试。
 
-> **Scope.** This repo contains the decision layer only. The upstream regression models are out of scope; the pipeline consumes predictions `(ŷ, σ)` and never inspects the model. A synthetic data generator makes the whole thing runnable without any private dataset.
+> **范围说明**：本仓库只包含决策层。上游回归模型不在范围内 ——
+> 流水线只消费模型给出的 `(ŷ, σ)`，从不检查模型内部。
+> 附带一个合成数据生成器，**无需任何私有数据集即可完整运行**。
 
 ---
 
-## Quick start
+## 快速开始
 
 ```bash
 pip install -r requirements.txt
 
-python code/mems_data.py      # inspect the synthetic dataset
-python demo/run_demo.py       # end-to-end decision layer
-python agent_system/run_tests.py   # test suites (see "Testing" below)
+python code/mems_data.py            # 查看合成数据集
+python demo/run_demo.py             # 决策层端到端演示
+python agent_system/run_tests.py    # 测试套件（见"测试"一节）
 ```
 
-No API key required. Without `LLM_API_KEY`, every LLM component degrades to a deterministic rule path by design — that fallback is itself tested.
+**不需要 API 密钥。** 没有 `LLM_API_KEY` 时，所有 LLM 组件都会降级到确定性规则路径 ——
+这个回退行为本身也是被测的。
 
 ---
 
-## Architecture
+## 架构
 
 ```
-                    upstream model (out of scope)
+                    上游模型（不在本仓库范围）
                               │  ŷ, σ
                               ▼
    ┌──────────────────────────────────────────────────────────┐
-   │  A4  Assess      conformal intervals ▸ RPD grading        │
-   │  A5  Route       budget-constrained re-measurement plan   │
-   │  A5b Guarded     LLM proposes ▸ 8 guard rules ▸ or fallback│
-   │  A5c Deliberate  propose ⇄ critique ⇄ revise (≤3 rounds)  │
-   │  A6  Report      structured text, numbers provenance-checked│
-   │  V   Validate    the only component that sees ground truth │
-   │  A7  Feedback    flag high-value samples for re-labelling  │
+   │  A4  评估      保形区间 ▸ RPD 分级                         │
+   │  A5  路由      预算约束下的复测规划                        │
+   │  A5b 门控      LLM 提议 ▸ 8 条门控 ▸ 不通过则回退规则       │
+   │  A5c 审议      提议 ⇄ 质疑 ⇄ 修订（≤3 轮）                 │
+   │  A6  报告      结构化文本，数值可溯源                      │
+   │  V   校验      **唯一**读取真值的环节                      │
+   │  A7  回流      标记高价值样本供人工复检                    │
    └──────────────────────────────────────────────────────────┘
 ```
 
-Two agents have **different capabilities**, which is what makes the interaction real rather than cosmetic:
+两个 Agent 的**能力边界不同**，这才让交互成为真交互而不是摆设：
 
-| Agent | Can do | Cannot do |
+| Agent | 能做什么 | 不能做什么 |
 |---|---|---|
-| **A5b decision agent** | choose actions; query structured fields | **see the spectrum** |
-| **A1 perception agent** | inspect the spectrum (spikes/saturation/NaN) | make a decision |
+| **A5b 决策 Agent** | 选择处置动作；查询结构化字段 | **看不到光谱** |
+| **A1 感知 Agent** | 检查光谱（尖峰/饱和/NaN） | 不能做决策 |
 
-So A5b must *request* `request_spectral_recheck` from A1. That is a genuine cross-agent call, not a data lookup.
+所以 A5b 必须**请求** A1 执行 `request_spectral_recheck`。
+这是一次真实的跨 Agent 调用，而不是查数据。
 
 ---
 
-## Guard rules
+## 门控规则
 
-Every rule has a test that **must fail** when the rule is violated — a guard that can never fire proves nothing.
+每条规则都配一个"违规时必须失败"的测试 —— **一条永远不会触发的门控，什么也证明不了。**
 
-| Rule | Rejects |
+| 规则 | 拒绝什么 |
 |---|---|
-| G1 | action outside `{report, retest, reference}` |
-| G1b | missing target |
-| G2 | reporting a target that is not reportable |
-| G3 | `report` while a whole model family is degraded |
-| G4 | reason code outside the allowed vocabulary |
-| G5 | a number in the proposal that no tool ever returned |
-| G6 | `report` when `report` has the highest expected loss |
-| **G7** | *(batch level)* proposals whose re-measure count exceeds the budget |
+| G1 | 动作不在 `{report, retest, reference}` 内 |
+| G1b | 缺少某个目标 |
+| G2 | 对不可报告目标给出 `report` |
+| G3 | 整个模型族退化时仍 `report` |
+| G4 | 理由码不在允许集合内 |
+| G5 | 提议中出现了任何工具从未返回过的数 |
+| G6 | 当 `report` 的期望损失最高时仍选择 `report` |
+| **G7** | *(批量级)* 提议集合的复测数超过预算 |
 
-**G7 exists because local validity is not global feasibility.** Ten individually-valid proposals can jointly break a budget. Verified: 10 samples all proposing `retest` with a 20% budget → exactly **2** survive, **8** fall back to the rule path.
+**G7 的存在理由：逐条合法 ≠ 整体可行。**
+10 条各自都合规的提议，合在一起可能击穿预算。
+已验证：10 个样本全部提议 `retest`、预算 20% ⇒ 最终**只有 2 个**保留，**8 个**回退规则。
 
 ---
 
-## What the demo prints
+## 演示输出
 
-Real output from `python demo/run_demo.py` on synthetic data:
+`python demo/run_demo.py` 在合成数据上的真实输出：
 
 ```
 Fat    R²=+0.8668  RPD= 2.74     ┐
-Prot   R²=+0.8711  RPD= 2.78     ├ reportable
+Prot   R²=+0.8711  RPD= 2.78     ├ 可报告
 TS     R²=+0.8603  RPD= 2.68     ┘
-Lact   R²=+0.0546  RPD= 1.03     ┐ not reportable
+Lact   R²=+0.0546  RPD= 1.03     ┐ 不可报告
 Urea   R²=-0.0120  RPD= 0.99     ┘
 
-conformal coverage   89.7%  (nominal 90%)
-guard on first sample ok=True
-validation pass rate 297/297 = 100.0%
+保形覆盖率          89.7%（名义 90%）
+首样本门控          ok=True
+校验通过率          297/297 = 100.0%
 
-family missing           degradation decision
+缺失分支                 降级判定
 []                       ok                 Δgap +0.0000
 ['b9']                   accept_degraded    Δgap +0.0006
 ['b8']                   retry              Δgap +0.0022
 ['b7','b8','b9']         abort              Δgap +0.0258
 ```
 
-The synthetic generator deliberately reproduces the *structure* of the real problem — the reportable set `[Fat, Prot, TS]` emerges from the RPD grades rather than being hard-coded.
+合成数据是有意复现真实问题的**结构**的 ——
+上报口径 `[Fat, Prot, TS]` 是从 RPD 分级**自动推导**出来的，不是硬编码的。
 
 ---
 
-## Measured results (original dataset, not included)
+## 实测结果（原始数据集，不在本仓库）
 
-These numbers come from the original study dataset and are **not reproducible in this repo** (the dataset is not redistributable). They are listed so the claims are auditable.
+以下数字来自原始研究数据集，**在本仓库中不可复现**（数据集不可再分发）。
+列出它们是为了让论断可被核查。
 
-| Claim | Measurement |
+| 论断 | 实测 |
 |---|---|
-| Reliability signal ranks errors | Spearman ρ = **0.165–0.196** (p < 0.01) |
-| Signal beats the industrial heuristic | AURC **+19.8% … +26.5%** vs threshold-proximity, across **5 threshold sets**, **100 random draws** (P = 0.99–1.00), **5 budget points** |
-| Signal combinations do not help | **9** combined signals tested — **all worse** than σ alone (−3% … −32%) |
-| Conformal calibration | **90.3%** coverage at nominal 90%, **95.1%** at 95% |
-| Process isolation | 3 workers, `module_arrays=0`, negative control detects a leaked array (2 vs 0) |
-| Fault behaviour | worker killed → 3.01 s; worker hung → 2.01 s; unauthorized field → `PermissionError`; component still usable afterwards |
-| LLM faithfulness | CFS **21.8%** (n=124, 95% CI 15.4–29.8%); concept accuracy **46.7%** (n=75, CI 35.8–57.8%) |
-| LLM adds decision value | Δ = **−0.002** — not significant; value is explanation and safety, not accuracy |
+| 可靠性信号能排序误差 | Spearman ρ = **0.165–0.196**（p < 0.01） |
+| 信号优于工业启发式 | AURC 比"阈值邻近法"**好 19.8%–26.5%**；在 **5 组阈值**、**100 次随机抽样**（P = 0.99–1.00）、**5 个预算点**下全部成立 |
+| 信号组合无效 | 试过 **9 种**组合信号，**全部更差**（−3% 到 −32%） |
+| 保形校准 | 名义 90% ⇒ **90.3%**；名义 95% ⇒ **95.1%** |
+| 进程隔离 | 3 个 worker，`module_arrays=0`；阴性对照能检出泄漏（2 vs 0） |
+| 故障行为 | worker 被杀 → 3.01 s 返回；挂起 → 2.01 s 超时；越权字段 → `PermissionError`；错误后组件仍可用 |
+| LLM 忠实性 | CFS **21.8%**（n=124，95% CI 15.4–29.8%）；概念判断准确率 **46.7%**（n=75，CI 35.8–57.8%） |
+| LLM 决策增益 | Δ = **−0.002**，**不显著** —— 价值在可解释与安全，不在更准 |
 
 ---
 
-## Design decisions worth arguing about
+## 几个值得争论的设计决定
 
-### The LLM is not allowed to decide alone
+### 不让 LLM 单独决策
 
-Measured concept-level decision accuracy is **46.7%** (95% CI 35.8–57.8%, three-class chance 33%). That is not good enough to decide, and it is *also* not evidence that reasoning is useless — the ablation flip rate (CFS) is 21.8%, so the concepts do drive roughly one decision in five. Hence: **propose → gate**, never **decide → explain**.
+实测概念级决策准确率 **46.7%**（95% CI 35.8–57.8%，三分类随机水平 33%）。
+这不足以让它决策；但它也**不是**"推理毫无用处"的证据 ——
+概念消融翻转率（CFS）是 21.8%，说明概念确实驱动了大约五分之一的决策。
 
-### Numbers in reports are provenance-checked, not just formatted
+所以架构是**提议 → 门控**，而不是**决策 → 事后解释**。
 
-`verify_numbers_strict` extracts every number from the rendered text and requires each one to trace back to a structured field, using **only the formats the template actually emits**. An earlier version allowed all rounding variants of each value, which let `12.3456` whitelist the string `12.3` — a fabricated number could slip through. Both directions are tested: missing numbers *and* invented numbers.
+### 报告里的数字是"可溯源"，不是"格式化过"
 
-### The pipeline reports what it cannot do
+`verify_numbers_strict` 会抽取出渲染文本里的**每一个**数字，
+要求它都能追溯到某个结构化字段，且**只允许模板实际输出的格式**。
 
-`SYSTEM_README.md` carries an explicit maturity table. Isolation is payload-isolation, **not filesystem isolation** — a process can still read a file it has permission to read, and a negative control proved it. Decision-layer triage only has content when the cost ratio `c_test / E|err|` lies in **[0.20, 2.00]**; outside that range the three-way decision collapses to a single policy and "optimising" it optimises a degenerate problem.
+早期版本允许每个数值的所有舍入变体，于是 `12.3456` 让字符串 `12.3` 也变成合法值 ——
+编造的数字因此能蒙混过关。两个方向都被测：**缺失的数字**和**编造的数字**。
+
+### 系统会主动报告自己做不到什么
+
+`agent_system/SYSTEM_README.md` 里有一张明确的成熟度表。
+隔离是**载荷级隔离**，不是文件系统隔离 —— 一个有读权限的进程照样能读文件，
+这一点已由阴性对照证实。
+
+决策层三分类只有在成本比 `c_test / E|err|` 落在 **[0.20, 2.00]** 区间内时才有内容；
+超出该区间，三分类退化为单一策略，"优化"它就是在优化一个退化问题。
 
 ---
 
-## Testing
+## 测试
 
 ```bash
 python agent_system/run_tests.py
 ```
 
 ```
-TOTAL  72 checks pass  |  18 suites skipped (require the original dataset)
+TOTAL  72 项通过  |  18 个套件跳过（需原始数据）
 ```
 
-The suite is split by what it can honestly prove:
+套件按"它能诚实证明什么"分成两类：
 
-| Kind | Runs without data? | Examples |
+| 类型 | 无数据能跑？ | 例子 |
 |---|---|---|
-| **Logic** | ✅ yes | guards (8 rules, one violation each), deliberation loop, report templating, number provenance, confidence intervals, analytic metric values (1.60 / 3.20) |
-| **Data-anchored** | ⏭ skipped | suites asserting values measured on the original dataset (e.g. gap = 0.0324, coverage = 90.3%) |
+| **逻辑类** | ✅ 能 | 8 条门控各配一条反例、审议环收敛、报告模板、数值溯源、置信区间、指标解析值（1.60 / 3.20） |
+| **数据锚点类** | ⏭ 跳过 | 断言原始数据集上实测值的套件（如 gap = 0.0324、覆盖率 = 90.3%） |
 
-Skipping is deliberate: those suites pin the numbers that are supposed to be *reproducible on the real dataset*. Letting them run on synthetic data would either fail spuriously or — worse — be relaxed until they pass, which is how a test stops meaning anything. Each skipped suite prints why it was skipped.
+**跳过是刻意设计**：那些套件钉住的正是"应该在真实数据集上可复现"的数字。
+让它们在合成数据上跑，要么假失败，要么被一路放松到通过 ——
+那样测试就不再意味着任何东西。每个被跳过的套件都会**打印跳过原因**。
 
-To run them, place the experiment artifacts under `experiments/` (see `DATA_MARKERS` in `run_tests.py`).
-
-**Testing philosophy: every guarantee gets a test that can refute it.**
-
-| Guarantee | How it is refuted |
-|---|---|
-| "The guard rejects bad proposals" | 7 hand-built violations, one per rule |
-| "Isolation keeps data out" | a deliberately leaking worker must be detected |
-| "The metric direction is right" | oracle ranking must score best; analytic values 1.60 / 3.20 must be hit exactly |
-| "Reports are not tampered" | flip a digit in the text — validation must fail |
-| "Degradation is correct" | drop a branch and compare against the measured degradation table |
+要跑它们，把实验产物放到 `experiments/`（见 `run_tests.py` 里的 `DATA_MARKERS`）。
 
 ---
 
-## Project structure
+## 项目结构
 
 ```
-code/            synthetic data generator, metrics
-demo/            end-to-end decision-layer demo
-agent_system/    the pipeline
-  agents/        A1 acquisition · A2 branch · A3 aggregate · A4 assess
-                 A5 route · A5b guarded · A5c deliberation
-                 A6 report/LLM · A7 feedback
-  context.py     per-agent access whitelist
-  orchestrator.py  DAG execution, timeouts
-  degradation.py   three-tier degradation thresholds
-  validator.py     the only component that sees ground truth
-  process_isolation.py  workers in separate OS processes
-  run_tests.py     logic + data-anchored suites (skip-aware)
+code/            合成数据生成器、指标
+demo/            决策层端到端演示
+agent_system/    流水线本体
+  agents/        A1 采集 · A2 分支 · A3 汇总 · A4 评估
+                 A5 路由 · A5b 门控 · A5c 审议
+                 A6 报告/LLM · A7 回流
+  context.py     逐 Agent 访问白名单
+  orchestrator.py  DAG 执行、超时
+  degradation.py   三档降级阈值
+  validator.py     唯一读取真值的组件
+  process_isolation.py  独立 OS 进程中的 worker
+  run_tests.py     逻辑类 + 数据锚点类套件（跳过感知）
 ```
 
 ---
 
-## Limitations
+## 局限
 
-- The upstream regression models are **not** included; the demo substitutes a ridge baseline.
-- Isolation is payload-level. Filesystem-level isolation would need containers or permission boundaries.
-- The triage problem degenerates outside `c_test / E|err| ∈ [0.20, 2.00]`.
-- LLM components were evaluated on 25 samples (75 judgments); confidence intervals are reported alongside every proportion rather than the point estimate alone.
-- No user study on report readability.
+- 上游回归模型**不在**本仓库；demo 用一个岭回归替代。
+- 隔离是载荷级的。文件系统级隔离需要容器或权限边界。
+- 成本比 `c_test / E|err|` 落在 [0.20, 2.00] 之外时，三分类决策退化。
+- LLM 组件在 25 个样本（75 次判断）上评估；所有比例型结果都同时给出置信区间，而不是只报点估计。
+- 报告可读性没有做用户研究。
 
-## License
+## 许可
 
-MIT — see `LICENSE`.
+MIT —— 见 `LICENSE`。

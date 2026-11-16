@@ -1,15 +1,13 @@
 ﻿# Demo
 
-`run_demo.py` runs the full decision layer on synthetic data.
+`run_demo.py` 在合成数据上跑完整决策层。
 
 ```bash
 python demo/run_demo.py
 ```
 
-What it shows: conformal intervals and RPD grading, budget-constrained
-routing under three loss structures, the guarded agent (rule path when no
-API key), the multi-agent deliberation interface, report rendering,
-validation, feedback selection, and the degradation table.
+演示内容：保形区间与 RPD 分级、三种损失结构下的预算约束路由、
+受门控的 Agent（无密钥时走规则路径）、多 Agent 审议接口、
+报告渲染、校验、回流选样，以及降级表。
 
-The upstream model is simulated by a per-view ridge regression; only the
-decision layer is under test here.
+上游模型用逐视图岭回归**模拟**；本仓库只负责决策层。
