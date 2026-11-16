@@ -18,8 +18,11 @@ pip install -r requirements.txt
 
 python code/mems_data.py            # 查看合成数据集
 python demo/run_demo.py             # 决策层端到端演示
+python examples/show_cases.py       # 门控拦截案例（建议先看这个）
 python agent_system/run_tests.py    # 测试套件
 ```
+
+门控拦截的具体轨迹见 [`examples/`](examples/README.md)：五类违规各一段运行输出。
 
 **不需要 API 密钥。** 没有 `LLM_API_KEY` 时所有 LLM 组件降级到确定性规则路径，该回退路径同样被测。
 
