@@ -18,37 +18,50 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-#: (路径, 名称, 是否需要网络/密钥)
+#: (路径, 名称, 是否需要原始数据)
+#:   ⚠️ 标 True 的套件断言了**原始数据集上的数值锚点**
+#:      （如主目标 gap = 0.0324）。合成数据无法复现这些锚点，
+#:      所以在缺少 experiments/*.npz 时它们会被**跳过**而非判失败。
 SUITES = [
     ('context.py', '上下文隔离', False),
     ('orchestrator.py', 'DAG + 并行 + 超时', False),
-    ('degradation.py', '三档降级', False),
-    ('assembly.py', '并行装配', False),
-    ('agents/a2_branch.py', '分支 Agent', False),
-    ('agents/a3_aggregate.py', '融合 + σ + TS 闭合', False),
-    ('agents/a4_assess.py', '保形区间 + 分级', False),
-    ('agents/a5_route.py', '损失无关路由', False),
+    ('degradation.py', '三档降级', True),
     ('agents/a5_guarded.py', '受约束的 Agent', False),
     ('agents/a5_deliberation.py', '多 Agent 审议', False),
-    ('agents/a6_report.py', '报告模板', False),
-    ('agents/a6_llm.py', 'LLM 措辞层（无密钥也测回退）', False),
+    ('agents/a6_report.py', '报告模板 + 数值溯源', False),
+    ('agents/a6_llm.py', 'LLM 措辞层（无密钥测回退）', False),
     ('agents/a6_llm_reason.py', 'LLM 推理层', False),
     ('agents/a7_feedback.py', '回流选样', False),
-    ('agents/a1_acquisition.py', '采集闸门 + 尖峰修复', False),
-    ('validator.py', '报告校验', False),
-    ('pipeline.py', '统一流水线', False),
-    ('process_isolation.py', '进程级隔离', False),
-    ('isolated_pipeline.py', '隔离版流水线', False),
-    ('check_isolation.py', '函数级泄漏检查', False),
-    ('smoke_evaluate.py', '评估脚本冒烟测试', False),
-    ('test_faults.py', '故障注入矩阵', False),
-    ('test_audit_negctl.py', '证据阴性对照审计', False),
-    ('test_negctl_suite.py', '检测器双向阴性对照', False),
-    ('test_number_provenance.py', '文档数字溯源核对', False),
-    ('test_crosscheck_v39.py', '与 v39 模型侧交叉核对', False),
     ('llm_ci.py', '置信区间计算', False),
     ('reliability_metrics.py', '可靠性指标（解析值自检）', False),
+    ('process_isolation.py', '进程级隔离', True),
+    ('agents/a2_branch.py', '分支 Agent', True),
+    ('agents/a3_aggregate.py', '融合 + σ + TS 闭合', True),
+    ('agents/a4_assess.py', '保形区间 + 分级', True),
+    ('agents/a5_route.py', '损失无关路由', True),
+    ('agents/a1_acquisition.py', '采集闸门 + 尖峰修复', True),
+    ('assembly.py', '并行装配', True),
+    ('validator.py', '报告校验', True),
+    ('pipeline.py', '统一流水线', True),
+    ('isolated_pipeline.py', '隔离版流水线', True),
+    ('check_isolation.py', '函数级泄漏检查', True),
+    ('smoke_evaluate.py', '评估脚本冒烟测试', True),
+    ('test_faults.py', '故障注入矩阵', True),
+    ('test_audit_negctl.py', '证据阴性对照审计', True),
+    ('test_negctl_suite.py', '检测器双向阴性对照', True),
+    ('test_number_provenance.py', '文档数字溯源核对', True),
+    ('test_crosscheck_v39.py', '与上游模型交叉核对', True),
 ]
+
+#: 判定"数据是否齐备"的标志文件
+DATA_MARKERS = (
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 'experiments', 'agent_evaluate.npz'),
+)
+
+
+def data_available():
+    return all(os.path.exists(p) for p in DATA_MARKERS)
 
 
 def run_one(rel, name):
@@ -78,7 +91,17 @@ def main():
     print('=' * 78)
     print(f'  {"module":26}{"items":>7}{"time":>9}  status')
     total_items, total_time, fails = 0, 0.0, []
-    for rel, name, _needs in SUITES:
+    have = data_available()
+    if not have:
+        print('  ⚠️ 未找到 experiments/*.npz —— 标 † 的套件将被**跳过**')
+        print('     （它们断言原始数据集上的数值锚点；合成数据无法复现）')
+        print()
+    n_skip = 0
+    for rel, name, needs_data in SUITES:
+        if needs_data and not have:
+            n_skip += 1
+            print(f'  {rel:26}{"†":>7}{"":>9}  ⏭   {name}（需原始数据）')
+            continue
         r = run_one(rel, name)
         total_time += r['elapsed']
         if r['n']:
@@ -89,8 +112,10 @@ def main():
         print(f'  {rel:26}{(r["n"] if r["n"] is not None else "?"):>7}'
               f'{r["elapsed"]:>8.1f}s  {st}  {name}')
     print('  ' + '-' * 72)
-    print(f'  {"TOTAL":26}{total_items:>7}{total_time:>8.1f}s  '
-          f'{"✅ 全部通过" if not fails else f"❌ {len(fails)} 个失败"}')
+    tail = ('✅ 全部通过' if not fails else f'❌ {len(fails)} 个失败')
+    if n_skip:
+        tail += f' ｜ ⏭ {n_skip} 个跳过（需原始数据）'
+    print(f'  {"TOTAL":26}{total_items:>7}{total_time:>8.1f}s  {tail}')
     if fails:
         print()
         for r in fails:

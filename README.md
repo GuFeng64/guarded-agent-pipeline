@@ -134,9 +134,20 @@ Measured concept-level decision accuracy is **46.7%** (95% CI 35.8–57.8%, thre
 python agent_system/run_tests.py
 ```
 
-28 suites covering context isolation, orchestration, degradation, conformal intervals, routing, guarded agents, deliberation, process isolation, fault injection, negative controls, and number provenance.
+```
+TOTAL  72 checks pass  |  18 suites skipped (require the original dataset)
+```
 
-Some suites assert anchors from the original dataset (e.g. a specific gap value) and will fail on synthetic data — those anchors are the point, not an accident. The suites that test *logic* (guards, faults, isolation, provenance) run standalone.
+The suite is split by what it can honestly prove:
+
+| Kind | Runs without data? | Examples |
+|---|---|---|
+| **Logic** | ✅ yes | guards (8 rules, one violation each), deliberation loop, report templating, number provenance, confidence intervals, analytic metric values (1.60 / 3.20) |
+| **Data-anchored** | ⏭ skipped | suites asserting values measured on the original dataset (e.g. gap = 0.0324, coverage = 90.3%) |
+
+Skipping is deliberate: those suites pin the numbers that are supposed to be *reproducible on the real dataset*. Letting them run on synthetic data would either fail spuriously or — worse — be relaxed until they pass, which is how a test stops meaning anything. Each skipped suite prints why it was skipped.
+
+To run them, place the experiment artifacts under `experiments/` (see `DATA_MARKERS` in `run_tests.py`).
 
 **Testing philosophy: every guarantee gets a test that can refute it.**
 
@@ -164,7 +175,7 @@ agent_system/    the pipeline
   degradation.py   three-tier degradation thresholds
   validator.py     the only component that sees ground truth
   process_isolation.py  workers in separate OS processes
-  run_tests.py     28 suites
+  run_tests.py     logic + data-anchored suites (skip-aware)
 ```
 
 ---
